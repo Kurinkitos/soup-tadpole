@@ -17,3 +17,5 @@ cozy-chess = { version = "0.3.2", features = ["std", "pext"] }
 vampirc-uci = "0.11.1"
 log = "0.4.18"
 simple-logging = "2.0.2"
+rayon = "1.7.0"
+dashmap = "5.4.0"
