@@ -2,11 +2,13 @@
 
 use cozy_chess::{Board, Rank, File};
 use engine::{EngineMessage, EngineReply};
-use std::{io::{self, BufRead}, process::exit, sync::mpsc::{Receiver, Sender}};
-use vampirc_uci::{UciMessage, parse_one, UciOptionConfig, UciFen, UciMove, UciSquare, UciPiece};
+use std::{io::{self, BufRead}, process::exit, sync::mpsc::{Receiver, Sender}, mem::size_of};
+use vampirc_uci::{UciMessage, parse_one, UciOptionConfig, UciFen, UciMove, UciSquare, UciPiece, UciInfoAttribute};
 use log::{LevelFilter, info, error, debug};
 
+
 mod engine;
+mod transposition_table;
 
 fn main() {
     let _res = simple_logging::log_to_file("test.log", LevelFilter::Debug);
@@ -66,7 +68,9 @@ fn main() {
             },
             UciMessage::Go { time_control, search_control } => {
                 sender.send(EngineMessage::Go).unwrap();
-                if let EngineReply::BestMove(mv) = reciver.recv().unwrap() {
+                if let EngineReply::BestMove(mv, score) = reciver.recv().unwrap() {
+                    let score_msg = UciMessage::Info(vec!(UciInfoAttribute::Score { cp: Some(score), mate: None, lower_bound: None, upper_bound: None }));
+                    send(score_msg);
                     let m = move_to_ucimove(mv);
                     let best_move_msg = UciMessage::BestMove { best_move: m, ponder: None };
                     send(best_move_msg);
