@@ -21,6 +21,7 @@ pub enum EngineMessage {
     Go,
     Stop,
     ReadyCheck,
+    NewGame,
     Quit,
 }
 
@@ -48,6 +49,7 @@ fn engine(recv: Receiver<EngineMessage>, send: Sender<EngineReply>) {
             EngineMessage::Stop => todo!(),
             EngineMessage::Quit => break,
             EngineMessage::ReadyCheck => send.send(EngineReply::ReadyMessage).unwrap(),
+            EngineMessage::NewGame => {state.transposition_table = Arc::new(TranspositionTable::new());}
         }
     }
 }
@@ -60,51 +62,61 @@ struct State {
 }
 
 fn search(state: &State) -> (Move, i32) {
-    let mut best_move: Option<(Move, i32)> = None;
-    //for depth in 2..5 {
-        let depth = 5;
-        let mut move_list = Vec::new();
-        state.board.generate_moves(|moves| {
-            // Unpack dense move set into move list
-            move_list.extend(moves);
-            false
-        });
-        let mut boards: Vec<Board> = vec![state.board.clone(); move_list.len()];
-        for (i, mv) in move_list.iter().enumerate() {
-            boards[i].play_unchecked(*mv);
-        }
-        
-        match state.transposition_table.probe(&state.board, 0, -10000, 10000) {
+    let mut move_list = Vec::new();
+    state.board.generate_moves(|moves| {
+        // Unpack dense move set into move list
+        move_list.extend(moves);
+        false
+    });
+    let mut best_move: (Move, i32) = (move_list[0], 0);
+    let mut boards: Vec<(Board, Move)> = vec![(state.board.clone(), move_list[0]); move_list.len()];
+    for (i, mv) in move_list.iter().enumerate() {
+        boards[i].0.play_unchecked(*mv);
+        boards[i].1 = *mv;
+    }
+    let mut alpha = -10000;
+    let mut beta = 10000;
+    for depth in 1..8 {
+
+        match state.transposition_table.probe(&state.board, depth, alpha, beta) {
             crate::transposition_table::ProbeResult::Miss => (),
-            crate::transposition_table::ProbeResult::OrderingHint(mv) => put_move_first(mv, &mut move_list),
-            crate::transposition_table::ProbeResult::SearchResult(mv, _) => put_move_first(mv, &mut move_list),
+            crate::transposition_table::ProbeResult::OrderingHint(mv) => put_move_board_first(mv, &mut boards),
+            crate::transposition_table::ProbeResult::SearchResult(mv, s) => {
+                best_move = (mv, s);
+                continue;
+            },
         }
 
-        let mv_iter = move_list.iter();
-        let eval_iter = boards.iter().map(|b| alpha_beta(-100000, 100000, 0, depth, b.clone(), state.transposition_table.clone()));
-        let mut evaluations : Vec<(&Move, i32)> = mv_iter.zip(eval_iter).collect();
+        let mut evaluations: Vec<(Move, i32)> = Vec::with_capacity(boards.len());
+
+        boards.par_iter().map(|(board, mv)| (mv.clone(), alpha_beta(alpha, beta, 0, depth, board.clone(), state.transposition_table.clone()))).collect_into_vec(&mut evaluations);
+        
 
         evaluations.sort_unstable_by(|(_, e1), (_, e2)| e1.partial_cmp(e2).unwrap());
 
         debug!("{:?}", evaluations);
 
-        best_move = Some((*evaluations.first().unwrap().0, evaluations.first().unwrap().1));
+        best_move = (evaluations.first().unwrap().0, evaluations.first().unwrap().1);
         let entry = TableEntry {
-            best_response: *evaluations.first().unwrap().0,
+            best_response: evaluations.first().unwrap().0,
             depth,
             score: evaluations.first().unwrap().1,
             node: NodeType::PV,
             age: 0,
         };
-        state.transposition_table.insert(&state.board, entry);
-    //}
-    return best_move.unwrap();
+        state.transposition_table.insert(state.board.clone(), entry);
+        // Update the aspiration window
+        alpha = evaluations.first().unwrap().1 - 100;
+        beta = evaluations.first().unwrap().1 + 100;
+        
+    }
+    return best_move;
 }
 
 fn alpha_beta(a: i32, beta: i32, depth: u32, max_depth: u32, board: Board, table: Arc<TranspositionTable>) -> i32 {
     let mut alpha = a;
 
-    if depth == max_depth {
+    if depth >= max_depth {
         let eval = evaluate(&board);
         return eval;
     }
@@ -115,26 +127,53 @@ fn alpha_beta(a: i32, beta: i32, depth: u32, max_depth: u32, board: Board, table
         move_list.extend(moves);
         false
     });
+    match table.probe(&board, depth, alpha, beta) {
+        crate::transposition_table::ProbeResult::Miss => (),
+        crate::transposition_table::ProbeResult::OrderingHint(mv) => put_move_first(mv, &mut move_list),
+        crate::transposition_table::ProbeResult::SearchResult(mv, s) => {
+            return s
+        },
+    }
 
     for mv in move_list {
         let mut local_board = board.clone();
         local_board.play_unchecked(mv);
         let score = -alpha_beta(-beta, -alpha, depth +1, max_depth, local_board, table.clone());
         if score >= beta {
+            let entry = TableEntry {
+                best_response: mv,
+                depth: max_depth,
+                score,
+                node: NodeType::Cut,
+                age: 0,
+            };
+            table.insert(board, entry);
             return beta;
         }
         if score > alpha {
+            let entry = TableEntry {
+                best_response: mv,
+                depth: max_depth,
+                score,
+                node: NodeType::All,
+                age: 0,
+            };
+            table.insert(board.clone(), entry);
             alpha = score;
         }
     }
     return alpha;
 }
 
-fn put_move_first(mv: Move, moves: &mut Vec<Move>) {
-    let target_pos = moves.iter().position(|&m| mv == m).unwrap();
-    moves.swap(target_pos, 0);
+fn put_move_board_first(mv: Move, boards: &mut Vec<(Board, Move)>) {
+    let target_pos = boards.iter().position(|m| mv == m.1).unwrap();
+    boards.swap(target_pos, 0);
 }
 
+fn put_move_first(mv: Move, moves: &mut Vec<Move>) {
+    let target_pos = moves.iter().position(|m| mv == *m).unwrap();
+    moves.swap(target_pos, 0);
+}
 
 // Evaluate the board from player that just made a move's perspective
 fn evaluate(board: &Board) -> i32 {
@@ -211,9 +250,11 @@ mod benches {
     }
 
     #[bench]
-    fn bench_search(b: &mut Bencher) {
+    fn bench_search_startpos(b: &mut Bencher) {
         let mut state = State::default();
-        state.transposition_table = Arc::new(TranspositionTable::new());
-        b.iter(|| search(&state))
+        b.iter(|| {
+            state.transposition_table = Arc::new(TranspositionTable::new());
+            search(&state);
+    })
     }
 }

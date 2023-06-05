@@ -19,7 +19,7 @@ pub enum NodeType {
 }
 
 impl TranspositionTable {
-    const MAX_SIZE: usize = 42_000_000; // Should be about 1 gb worth of entries
+    const MAX_SIZE: usize = 10_000_000;
 
     pub fn new() -> Self {
         Self { table : DashMap::with_capacity(TranspositionTable::MAX_SIZE), oldest_entry : AtomicI32::new(0) }
@@ -65,23 +65,24 @@ impl TranspositionTable {
     }
 
     /// Inserts a value in the table, replacing if better, and triggering prune if needed
-    pub fn insert(&self, pos: &Board, entry: TableEntry) {
+    pub fn insert(&self, pos: Board, entry: TableEntry) {
         // Prune if it would get over limit
         if self.table.len() + 1 >= TranspositionTable::MAX_SIZE {
             self.prune();
             debug!("Pruning tt");
         }
 
-        match self.table.get(pos) {
-            Some(res) => {
-                if res.depth <= entry.depth {
-                    self.table.insert(pos.clone(), entry);
+        match self.table.remove(&pos) {
+            Some((_, old_value)) => {
+                if entry.depth >= old_value.depth {
+                    self.table.insert(pos, entry);
+                } else {
+                    self.table.insert(pos, old_value);
                 }
             },
             None => {
-                // This position is not in the table, so save it
-                self.table.insert(pos.clone(), entry);
-            },
+                self.table.insert(pos, entry);
+            }
         }
     }
     fn prune(&self) {

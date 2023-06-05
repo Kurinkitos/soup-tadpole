@@ -41,7 +41,7 @@ fn main() {
                 exit(0);
             },
             UciMessage::UciNewGame => {
-                // Currently nothing needs to be done here
+                sender.send(EngineMessage::NewGame).unwrap();
             },
             UciMessage::Position { startpos, fen, moves } => {
                 if startpos {
