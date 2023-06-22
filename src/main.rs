@@ -2,8 +2,8 @@
 
 use cozy_chess::{Board, Rank, File};
 use engine::{EngineMessage, EngineReply};
-use std::{io::{self, BufRead}, process::exit, sync::mpsc::{Receiver, Sender}, mem::size_of};
-use vampirc_uci::{UciMessage, parse_one, UciOptionConfig, UciFen, UciMove, UciSquare, UciPiece, UciInfoAttribute};
+use std::{io::{self, BufRead}, process::exit, sync::mpsc::{Receiver, Sender}};
+use vampirc_uci::{UciMessage, parse_one, UciFen, UciMove, UciSquare, UciPiece, UciInfoAttribute};
 use log::{LevelFilter, info, error, debug};
 
 
@@ -47,26 +47,32 @@ fn main() {
                 if startpos {
                     info!("Setting board to starting position");
                     let mut board = Board::default();
+                    let mut history: Vec<cozy_chess::Move> = Vec::new();
                     for mv in moves {
                         let mv_str = format!("{}", mv);
-                        board.play_unchecked(mv_str.parse().unwrap());
+                        let mv: cozy_chess::Move = mv_str.parse().unwrap();
+                        board.play_unchecked(mv);
+                        history.push(mv);
                     } 
-                    sender.send(EngineMessage::Position(board)).unwrap();
+                    sender.send(EngineMessage::Position(board, history)).unwrap();
                 } else {
                     if let Some(UciFen(fen_str)) = fen {
                         let mut board = fen_str.parse::<Board>().unwrap();
+                        let mut history: Vec<cozy_chess::Move> = Vec::new();
                         for mv in moves {
                             let mv_str = format!("{}", mv);
-                            board.play_unchecked(mv_str.parse().unwrap());
+                            let mv: cozy_chess::Move = mv_str.parse().unwrap();
+                            board.play_unchecked(mv);
+                            history.push(mv);
                         } 
-                        sender.send(EngineMessage::Position(board)).unwrap();
+                        sender.send(EngineMessage::Position(board, history)).unwrap();
                     } else {
                         error!("Invalide position message recived!");
                         exit(1);
                     }
                 }
             },
-            UciMessage::Go { time_control, search_control } => {
+            UciMessage::Go { time_control, search_control} => {
                 sender.send(EngineMessage::Go).unwrap();
                 if let EngineReply::BestMove(mv, score) = reciver.recv().unwrap() {
                     let score_msg = UciMessage::Info(vec!(UciInfoAttribute::Score { cp: Some(score), mate: None, lower_bound: None, upper_bound: None }));
